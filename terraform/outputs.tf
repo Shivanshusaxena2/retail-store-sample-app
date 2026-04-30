@@ -105,6 +105,32 @@ output "retail_store_url" {
 }
 
 # =============================================================================
+# GITHUB ACTIONS / ECR
+# =============================================================================
+
+output "gitops_user_access_key_id" {
+  description = "AWS_ACCESS_KEY_ID for gitops-user — add to GitHub Secrets"
+  value       = aws_iam_access_key.gitops.id
+  sensitive   = true
+}
+
+output "gitops_user_secret_access_key" {
+  description = "AWS_SECRET_ACCESS_KEY for gitops-user — add to GitHub Secrets"
+  value       = aws_iam_access_key.gitops.secret
+  sensitive   = true
+}
+
+output "github_actions_role_arn" {
+  description = "IAM Role ARN to use in GitHub Actions (OIDC)"
+  value       = aws_iam_role.github_actions_ecr.arn
+}
+
+output "ecr_repository_urls" {
+  description = "ECR repository URLs for all services"
+  value       = { for k, v in aws_ecr_repository.services : k => v.repository_url }
+}
+
+# =============================================================================
 # USEFUL COMMANDS
 # =============================================================================
 
