@@ -3,8 +3,8 @@
 # =============================================================================
 
 locals {
-  github_repo     = "LondheShubham153/retail-store-sample-app"
-  ecr_services    = ["ui", "catalog", "cart", "checkout", "orders"]
+  github_repo  = "LondheShubham153/retail-store-sample-app"
+  ecr_services = ["ui", "catalog", "cart", "checkout", "orders"]
 }
 
 # GitHub OIDC Identity Provider
@@ -128,6 +128,7 @@ resource "aws_ecr_repository" "services" {
 
   name                 = "retail-store-${each.key}"
   image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
