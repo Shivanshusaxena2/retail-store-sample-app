@@ -1,12 +1,6 @@
 image:
   repository: 033484686218.dkr.ecr.us-west-2.amazonaws.com/retail-store-cart
-  tag: "dev-e8f7fd4"
+  tag: "dev-c193778"
   pullPolicy: Always
 imagePullSecrets:
   - name: regcred
-resources:
-  requests:
-    cpu: 50m
-    memory: 256Mi
-  limits:
-    memory: 512Mi
