@@ -1,0 +1,67 @@
+name: Promote to Main
+
+# Triggers after the Deploy workflow completes successfully on gitops branch
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    branches: [gitops]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  promote:
+    name: Promote gitops → main
+    runs-on: ubuntu-latest
+    # Only run if the Deploy workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout gitops branch
+        uses: actions/checkout@v4
+        with:
+          ref: gitops
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global user.email "gitops-bot@github.com"
+          git config --global user.name "GitOps Bot"
+
+      - name: Merge gitops into main
+        run: |
+          echo "🔀 Promoting gitops → main"
+          git checkout main
+          git pull origin main
+
+          # Merge gitops into main (keep gitops Helm values with private ECR images)
+          git merge origin/gitops --no-ff \
+            -m "🚀 Promote gitops to main [skip ci] - $(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          git push origin main
+          echo "✅ Successfully promoted gitops to main"
+
+      - name: Trigger ArgoCD sync
+        run: |
+          echo "## 🔀 Promotion Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**From:** gitops branch" >> $GITHUB_STEP_SUMMARY
+          echo "**To:** main branch" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by workflow run:** ${{ github.event.workflow_run.id }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **ArgoCD will auto-sync from main within 3 minutes**" >> $GITHUB_STEP_SUMMARY
+
+  notify-failure:
+    name: Notify Deploy Failure
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Report failure
+        run: |
+          echo "## ❌ Promotion Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Deploy workflow failed — gitops was NOT promoted to main." >> $GITHUB_STEP_SUMMARY
+          echo "Fix the Deploy workflow first, then re-run." >> $GITHUB_STEP_SUMMARY
+          echo "❌ Deploy failed — skipping promotion to main"
+          exit 0

@@ -9,7 +9,7 @@ spec:
   project: retail-store
   source:
     repoURL: https://github.com/Shivanshusaxena2/retail-store-sample-app
-    targetRevision: main
+    targetRevision: gitops
     path: src/catalog/chart
     helm:
       valueFiles:
@@ -22,4 +22,4 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      - CreateNamespace=true 
+      - CreateNamespace=true
