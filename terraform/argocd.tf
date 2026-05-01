@@ -37,7 +37,7 @@ resource "helm_release" "argocd" {
         # Set admin password to admin@123 (bcrypt hash)
         # To regenerate: htpasswd -nbBC 10 "" admin@123 | tr -d ':\n'
         secret = {
-          argocdServerAdminPassword      = "$2a$10$rRyBsGSHK6.uc8fntPwVIuLVHgsAhAX7TcdrqW1/6SpIykYSC.pLi"
+          argocdServerAdminPassword      = "$2a$10$lqyJT0yKZOdorwZ93BnlGuCc5xFeWWiHPkiv98ownDhVSGEFr/Uyy"
           argocdServerAdminPasswordMtime = "2026-01-01T00:00:00Z"
         }
       }
