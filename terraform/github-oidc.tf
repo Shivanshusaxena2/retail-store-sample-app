@@ -3,7 +3,7 @@
 # =============================================================================
 
 locals {
-  github_repo  = "LondheShubham153/retail-store-sample-app"
+  github_repo  = "Shivanshusaxena2/retail-store-sample-app"
   ecr_services = ["ui", "catalog", "cart", "checkout", "orders"]
 }
 
