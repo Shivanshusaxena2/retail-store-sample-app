@@ -27,6 +27,11 @@ resource "helm_release" "argocd" {
         params = {
           "server.insecure" = true
         }
+        # Set admin password to admin@123 (bcrypt hash)
+        secret = {
+          argocdServerAdminPassword      = "$2a$10$lqyJT0yKZOdorwZ93BnlGuCc5xFeWWiHPkiv98ownDhVSGEFr/Uyy"
+          argocdServerAdminPasswordMtime = "2026-01-01T00:00:00Z"
+        }
       }
       server = {
         service = {
