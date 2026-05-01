@@ -1,0 +1,165 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [dev]
+    paths: ['src/**']
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      changed-services: ${{ steps.changes.outputs.changed-services }}
+      matrix: ${{ steps.changes.outputs.matrix }}
+      has-changes: ${{ steps.changes.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          SERVICES=("ui" "catalog" "cart" "checkout" "orders")
+          CHANGED_SERVICES=()
+
+          for service in "${SERVICES[@]}"; do
+            if git diff --name-only HEAD~1 HEAD | grep -q "^src/$service/" || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              CHANGED_SERVICES+=("$service")
+              echo "✅ Changes detected in: $service"
+            fi
+          done
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            CHANGED_SERVICES=("ui" "catalog" "cart" "checkout" "orders")
+          fi
+
+          if [ ${#CHANGED_SERVICES[@]} -eq 0 ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          MATRIX_JSON="["
+          for i in "${!CHANGED_SERVICES[@]}"; do
+            [ $i -gt 0 ] && MATRIX_JSON+=","
+            MATRIX_JSON+="\"${CHANGED_SERVICES[$i]}\""
+          done
+          MATRIX_JSON+="]"
+
+          echo "changed-services=${CHANGED_SERVICES[*]}" >> $GITHUB_OUTPUT
+          echo "matrix={\"service\":$MATRIX_JSON}" >> $GITHUB_OUTPUT
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+          echo "📊 Dev services to build: ${CHANGED_SERVICES[*]}"
+
+  deploy-dev:
+    name: Deploy ${{ matrix.service }} → Dev
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    permissions:
+      contents: write
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push ${{ matrix.service }} (dev tag)
+        run: |
+          SERVICE="${{ matrix.service }}"
+          # Dev images tagged with dev- prefix to distinguish from prod
+          TAG="dev-$(echo ${{ github.sha }} | cut -c1-7)"
+          ECR_REPO="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/retail-store-${SERVICE}"
+
+          echo "🔨 Building DEV ${SERVICE}:${TAG}"
+          docker build -t "${ECR_REPO}:${TAG}" -t "${ECR_REPO}:dev-latest" "src/${SERVICE}/"
+          docker push "${ECR_REPO}:${TAG}"
+          docker push "${ECR_REPO}:dev-latest"
+
+          echo "✅ Pushed ${ECR_REPO}:${TAG}"
+          echo "ECR_REPO=${ECR_REPO}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${TAG}" >> $GITHUB_ENV
+
+      - name: Update dev Helm values for ${{ matrix.service }}
+        run: |
+          SERVICE="${{ matrix.service }}"
+          TAG="${{ env.IMAGE_TAG }}"
+          ECR_REPO="${{ env.ECR_REPO }}"
+          VALUES_FILE="src/${SERVICE}/chart/values-dev.yaml"
+
+          # Create or update the dev-specific values override file
+          cat > "${VALUES_FILE}" <<EOF
+          image:
+            repository: ${ECR_REPO}
+            tag: "${TAG}"
+            pullPolicy: Always
+          imagePullSecrets:
+            - name: regcred
+          EOF
+
+          echo "✅ Updated ${VALUES_FILE} with tag ${TAG}"
+
+      - name: Commit dev Helm values for ${{ matrix.service }}
+        run: |
+          SERVICE="${{ matrix.service }}"
+          TAG="${{ env.IMAGE_TAG }}"
+
+          git config --local user.email "gitops-dev@github.com"
+          git config --local user.name "GitOps Dev Bot"
+
+          if ! git diff --quiet "src/${SERVICE}/chart/values-dev.yaml"; then
+            git add "src/${SERVICE}/chart/values-dev.yaml"
+            git commit -m "🚀 [dev] Update ${SERVICE} image to ${TAG} [skip ci]"
+
+            for i in {1..3}; do
+              if git push origin dev; then
+                echo "✅ Pushed dev Helm update for ${SERVICE}"
+                break
+              else
+                echo "⚠️ Push failed, attempt $i/3. Retrying..."
+                git pull --rebase origin dev
+                sleep 2
+              fi
+              if [ $i -eq 3 ]; then
+                echo "❌ Failed to push after 3 attempts"
+                exit 1
+              fi
+            done
+          else
+            echo "📝 No dev Helm changes for ${SERVICE}"
+          fi
+
+  summary:
+    name: Dev Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, deploy-dev]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🛠️ Dev Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** dev" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.deploy-dev.result }}" == "success" ]; then
+            echo "✅ **Status:** Dev deployment successful — ArgoCD will sync to dev cluster" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Status:** Dev deployment failed — prod is NOT affected" >> $GITHUB_STEP_SUMMARY
+          fi
