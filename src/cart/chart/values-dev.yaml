@@ -4,3 +4,9 @@ image:
   pullPolicy: Always
 imagePullSecrets:
   - name: regcred
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
