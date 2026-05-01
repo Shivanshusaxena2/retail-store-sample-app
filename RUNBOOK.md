@@ -1,244 +1,174 @@
-# Retail Store Infrastructure — Runbook & Change Guide
+# Retail Store Infrastructure — Runbook & Recreate Guide
 
-This document covers every change required when recreating this infrastructure,
-known issues encountered, and the fixes applied. Keep this updated as the setup evolves.
+This document covers everything needed to recreate this infrastructure from scratch.
+Keep this updated as the setup evolves.
 
 ---
 
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Required Code Changes Before Deploying](#2-required-code-changes-before-deploying)
-3. [GitHub Secrets Setup](#3-github-secrets-setup)
-4. [Deployment Steps](#4-deployment-steps)
-5. [Post-Deploy Manual Steps](#5-post-deploy-manual-steps)
-6. [Known Issues & Fixes](#6-known-issues--fixes)
-7. [Accessing the Application](#7-accessing-the-application)
-8. [Destroying & Recreating Infrastructure](#8-destroying--recreating-infrastructure)
-9. [Tools Required on Your Machine](#9-tools-required-on-your-machine)
+1. [Architecture Overview](#1-architecture-overview)
+2. [Prerequisites — Tools to Install](#2-prerequisites--tools-to-install)
+3. [Required Code Changes Before Deploying](#3-required-code-changes-before-deploying)
+4. [GitHub Secrets Setup](#4-github-secrets-setup)
+5. [Deploy Production Infrastructure](#5-deploy-production-infrastructure)
+6. [Deploy Dev Infrastructure](#6-deploy-dev-infrastructure)
+7. [Post-Deploy Steps (Both Envs)](#7-post-deploy-steps-both-envs)
+8. [Accessing Everything](#8-accessing-everything)
+9. [Known Issues & Fixes](#9-known-issues--fixes)
+10. [Destroy & Recreate](#10-destroy--recreate)
+11. [Quick Reference](#11-quick-reference)
 
 ---
 
-## 1. Prerequisites
+## 1. Architecture Overview
 
-### AWS Account
-- AWS CLI configured with credentials that have admin or sufficient IAM permissions
-- Account ID: `033484686218` (update if using a different account)
-- Region: `us-west-2` (default — change in `terraform/variables.tf` if needed)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  PRODUCTION                                                      │
+│  Branch: gitops  │  Cluster: retail-store-xxxx                  │
+│  Namespace: retail-store  │  VPC: 10.0.0.0/16                   │
+│  Terraform: terraform/                                           │
+│  ArgoCD apps: argocd/applications/  (targetRevision: gitops)    │
+│  CI: .github/workflows/deploy.yml                               │
+│  Images: private ECR (prod tags e.g. 7a1d96c)                   │
+└─────────────────────────────────────────────────────────────────┘
 
-### Required IAM Permissions
-The AWS user/role running Terraform needs:
-- `eks:*`
-- `ec2:*`
-- `iam:*`
-- `ecr:*`
-- `elasticloadbalancing:*`
-- `autoscaling:*`
+┌─────────────────────────────────────────────────────────────────┐
+│  DEV                                                             │
+│  Branch: dev  │  Cluster: retail-store-dev-xxxx                 │
+│  Namespace: retail-store-dev  │  VPC: 10.1.0.0/16              │
+│  Terraform: terraform-dev/                                       │
+│  ArgoCD apps: argocd-dev/applications/ (targetRevision: dev)    │
+│  CI: .github/workflows/deploy-dev.yml                           │
+│  Images: private ECR (dev- prefix tags e.g. dev-e8f7fd4)        │
+└─────────────────────────────────────────────────────────────────┘
 
-### Tools to Install on Windows
-| Tool | How to Install | Notes |
-|------|---------------|-------|
-| AWS CLI v2 | [aws.amazon.com/cli](https://aws.amazon.com/cli/) | Already in PATH at `C:\Program Files\Amazon\AWSCLIV2\` |
-| kubectl | See Section 9 | Must be manually placed in PATH |
-| Helm v3 | `winget install Helm.Helm` | Already installed via winget |
-| Terraform | Download from hashicorp.com, place in `C:\Terraform\` | Already in PATH |
-| Docker Desktop | `winget install Docker.DockerDesktop` | Requires restart after install |
-| Git | `winget install Git.Git` | Required for GitOps workflow |
+CI/CD Flow:
+  Push src/** to gitops → deploy.yml → build+push ECR → ArgoCD syncs prod
+  Push src/** to dev    → deploy-dev.yml → build+push ECR → ArgoCD syncs dev
+  Prod deploy success   → promote-to-main.yml → merge gitops→main
+```
 
 ---
 
-## 2. Required Code Changes Before Deploying
+## 2. Prerequisites — Tools to Install
 
-These are the values you **must update** every time you recreate the infrastructure.
+### Install kubectl (Windows — no admin needed)
+```powershell
+New-Item -ItemType Directory -Path "$env:USERPROFILE\bin" -Force
+curl.exe -L -o "$env:USERPROFILE\bin\kubectl.exe" `
+  "https://dl.k8s.io/release/v1.33.1/bin/windows/amd64/kubectl.exe"
+$currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+[Environment]::SetEnvironmentVariable('PATH', "$env:USERPROFILE\bin;$currentPath", 'User')
+$env:PATH = "$env:USERPROFILE\bin;" + $env:PATH
+kubectl version --client
+```
 
-### 2.1 — GitHub Repository URL (ArgoCD Applications)
+### Install Helm
+```powershell
+winget install Helm.Helm --accept-package-agreements --accept-source-agreements
+```
 
-Every ArgoCD application YAML points to a hardcoded GitHub repo URL.
-Update all 5 files if you fork or rename the repository.
+### Install Terraform
+Download from https://developer.hashicorp.com/terraform/downloads
+Extract `terraform.exe` to `C:\Terraform\` (already in PATH).
 
-**Files to update:**
+### Install Docker Desktop
+```powershell
+winget install Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
+# Restart machine after install, then launch Docker Desktop
+```
+
+### Install GitHub CLI (optional, for triggering workflows)
+```powershell
+winget install GitHub.cli --accept-package-agreements --accept-source-agreements
+```
+
+### Configure AWS CLI
+```bash
+aws configure
+# Region: us-west-2
+# Output: json
+```
+
+---
+
+## 3. Required Code Changes Before Deploying
+
+### 3.1 — GitHub Repo URL in ArgoCD files
+If you fork or rename the repo, update `repoURL` in ALL these files:
 - `argocd/applications/retail-store-ui.yaml`
 - `argocd/applications/retail-store-catalog.yaml`
 - `argocd/applications/retail-store-cart.yaml`
 - `argocd/applications/retail-store-checkout.yaml`
 - `argocd/applications/retail-store-orders.yaml`
 - `argocd/projects/retail-store-project.yaml`
+- `argocd-dev/applications/retail-store-dev-*.yaml`
+- `argocd-dev/projects/retail-store-dev-project.yaml`
 
-**What to change:**
-```yaml
-# Current value (change this if repo is different)
-repoURL: https://github.com/Shivanshusaxena2/retail-store-sample-app
+Current value: `https://github.com/Shivanshusaxena2/retail-store-sample-app`
 
-# Also in projects/retail-store-project.yaml
-sourceRepos:
-  - 'https://github.com/Shivanshusaxena2/retail-store-sample-app'
-```
-
-### 2.2 — Target Branch in ArgoCD Applications
-
-Currently all ArgoCD apps point to `main`. If deploying the GitOps (CI/CD) workflow,
-change to `gitops` branch.
-
-```yaml
-# For GitOps/production workflow — change in all 5 application YAMLs
-targetRevision: gitops   # was: main
-```
-
-### 2.3 — ArgoCD Helm Chart — Fix Deprecated Config
-
-In `terraform/argocd.tf`, the `server.extraArgs["--insecure"]` setting is deprecated
-in ArgoCD chart v5.x+. Replace it to avoid warnings and future breakage.
-
-**Current (deprecated):**
+### 3.2 — GitHub Repo in github-oidc.tf
 ```hcl
-server = {
-  extraArgs = ["--insecure"]
+# terraform/github-oidc.tf and terraform-dev/ (if added)
+locals {
+  github_repo = "Shivanshusaxena2/retail-store-sample-app"  # update if repo changes
 }
 ```
 
-**Fix — replace with:**
-```hcl
-configs = {
-  params = {
-    "server.insecure" = true
-  }
-}
-```
-
-Full corrected block in `terraform/argocd.tf`:
-```hcl
-values = [
-  yamlencode({
-    configs = {
-      params = {
-        "server.insecure" = true
-      }
-    }
-    server = {
-      service = {
-        type = "ClusterIP"
-      }
-      ingress = {
-        enabled = false
-      }
-    }
-    # ... rest of controller/repoServer/redis blocks unchanged
-  })
-]
-```
-
-### 2.4 — Terraform Helm Release Timeout
-
-The default Terraform timeout for `helm_release` is 5 minutes, which is too short
-for ArgoCD on a fresh cluster. Add `timeout` to prevent the `context deadline exceeded` error.
-
-**File:** `terraform/argocd.tf`
-
-Add this inside the `helm_release "argocd"` resource:
-```hcl
-resource "helm_release" "argocd" {
-  name             = "argocd"
-  namespace        = var.argocd_namespace
-  create_namespace = true
-  timeout          = 600   # <-- ADD THIS (10 minutes)
-  wait             = true  # <-- ADD THIS
-
-  repository = "https://argoproj.github.io/argo-helm"
-  chart      = "argo-cd"
-  version    = var.argocd_chart_version
-  # ...
-}
-```
-
-### 2.5 — AWS Region
-
-Default region is `us-west-2`. To change it, update `terraform/variables.tf`:
-```hcl
-variable "aws_region" {
-  default = "us-west-2"   # Change this
-}
-```
-
-### 2.6 — Kubernetes Version
-
-Default is `1.33`. Check EKS supported versions before deploying.
-Update in `terraform/variables.tf`:
-```hcl
-variable "kubernetes_version" {
-  default = "1.33"   # Verify this is still supported
-}
-```
+### 3.3 — AWS Region / Account ID
+Default region is `us-west-2`. To change:
+- `terraform/variables.tf` → `aws_region`
+- `terraform-dev/variables.tf` → `aws_region`
+- All `values-dev.yaml` files → ECR URLs contain account ID `033484686218`
 
 ---
 
-## 3. GitHub Secrets Setup
+## 4. GitHub Secrets Setup
 
-Required for the GitOps CI/CD pipeline (`.github/workflows/deploy.yml`).
-Go to: **GitHub repo → Settings → Secrets and variables → Actions → New repository secret**
+Go to: **GitHub repo → Settings → Secrets and variables → Actions**
 
-| Secret Name | Value | Description |
-|-------------|-------|-------------|
-| `AWS_ACCESS_KEY_ID` | Your AWS access key | IAM user with ECR + EKS permissions |
-| `AWS_SECRET_ACCESS_KEY` | Your AWS secret key | Paired with above |
-| `AWS_REGION` | `us-west-2` | Must match Terraform region |
+| Secret | Value | Notes |
+|--------|-------|-------|
+| `AWS_ACCESS_KEY_ID` | From terraform output | Run `terraform output -raw gitops_user_access_key_id` |
+| `AWS_SECRET_ACCESS_KEY` | From terraform output | Run `terraform output -raw gitops_user_secret_access_key` |
+| `AWS_REGION` | `us-west-2` | |
 | `AWS_ACCOUNT_ID` | `033484686218` | Your 12-digit AWS account ID |
 
-> **Security note:** Use an IAM user with least-privilege permissions, not root credentials.
-> Rotate keys regularly.
+> **Important:** Get credentials AFTER `terraform apply` completes — Terraform creates the `gitops-user` IAM user with exact ECR permissions needed.
 
 ---
 
-## 4. Deployment Steps
+## 5. Deploy Production Infrastructure
 
-### Step 1 — Clone and configure
-```bash
-git clone https://github.com/Shivanshusaxena2/retail-store-sample-app
-cd retail-store-sample-app
-```
-Apply changes from Section 2 above.
-
-### Step 2 — Initialize Terraform
 ```bash
 cd terraform
+
+# Initialize
 terraform init
-```
 
-### Step 3 — Review the plan
-```bash
+# Review
 terraform plan
-```
-Check that EKS cluster, VPC, node groups, ArgoCD, cert-manager, and ingress-nginx are all listed.
 
-### Step 4 — Apply
-```bash
+# Deploy (~15-20 min)
 terraform apply
 ```
-This takes approximately **15–20 minutes** for the full stack.
 
-### Step 5 — Update kubeconfig
-After apply completes, get the cluster name from Terraform output or AWS CLI:
+### After apply completes:
+
 ```bash
-aws eks list-clusters --region us-west-2
+# Get cluster name from output
+terraform output cluster_name
+
+# Update kubeconfig
 aws eks update-kubeconfig --region us-west-2 --name <cluster-name>
+
+# Verify nodes
 kubectl get nodes
 ```
 
-### Step 6 — Verify ArgoCD
-```bash
-kubectl get pods -n argocd
-helm list -n argocd
-```
-All pods should be `Running` and helm status should be `deployed`.
-
----
-
-## 5. Post-Deploy Manual Steps
-
-### 5.1 — If ArgoCD helm shows "failed" status
-
-This happens when Terraform times out but ArgoCD is actually running fine.
-Fix by running helm upgrade manually:
-
+### Fix ArgoCD if helm shows "failed" status:
 ```bash
 helm upgrade argocd argo-cd \
   --repo https://argoproj.github.io/argo-helm \
@@ -247,243 +177,297 @@ helm upgrade argocd argo-cd \
   --reuse-values \
   --wait \
   --timeout 10m
+
+# Then re-run terraform apply to finish ArgoCD apps
+terraform apply
 ```
 
-Then re-run `terraform apply` — it will continue from where it left off.
+### Create ECR pull secret on prod cluster:
+```powershell
+$token = aws ecr get-authorization-token --region us-west-2 --query 'authorizationData[0].authorizationToken' --output text
+$decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($token))
+$password = $decoded.Split(':')[1]
+kubectl create secret docker-registry regcred `
+  --docker-server=033484686218.dkr.ecr.us-west-2.amazonaws.com `
+  --docker-username=AWS `
+  --docker-password=$password `
+  -n retail-store --dry-run=client -o yaml | kubectl apply -f -
+```
 
-### 5.2 — Get ArgoCD Admin Password
+### Update GitHub Secrets with new credentials:
 ```bash
-# PowerShell
-kubectl -n argocd get secret argocd-initial-admin-secret `
-  -o jsonpath="{.data.password}" | `
-  ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+terraform output -raw gitops_user_access_key_id
+terraform output -raw gitops_user_secret_access_key
+```
+Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in GitHub Secrets.
 
-# Bash/Linux
+### Fix image tags if pods show ImagePullBackOff:
+```bash
+# Check what tags exist in ECR
+aws ecr list-images --repository-name retail-store-ui --region us-west-2 --query 'imageIds[?imageTag!=`latest`].imageTag'
+
+# Update values.yaml for affected services with the correct tag
+# Then commit and push to gitops branch
+```
+
+### Remove Karpenter disruption taint if pods are Pending:
+```bash
+kubectl taint node --all karpenter.sh/disrupted:NoSchedule-
+```
+
+---
+
+## 6. Deploy Dev Infrastructure
+
+```bash
+cd terraform-dev
+
+# Initialize
+terraform init
+
+# Deploy (~15-20 min)
+terraform apply
+```
+
+### After apply completes:
+
+```bash
+# Get dev cluster name
+terraform output cluster_name
+
+# Add dev context with alias
+aws eks update-kubeconfig --region us-west-2 --name <dev-cluster-name> --alias dev
+
+# Verify
+kubectl get nodes --context dev
+```
+
+### Create ECR pull secret on dev cluster:
+```powershell
+$token = aws ecr get-authorization-token --region us-west-2 --query 'authorizationData[0].authorizationToken' --output text
+$decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($token))
+$password = $decoded.Split(':')[1]
+kubectl create namespace retail-store-dev --context dev
+kubectl create secret docker-registry regcred `
+  --docker-server=033484686218.dkr.ecr.us-west-2.amazonaws.com `
+  --docker-username=AWS `
+  --docker-password=$password `
+  -n retail-store-dev --context dev
+```
+
+### Force ArgoCD to sync dev apps:
+```bash
+for app in retail-store-dev-ui retail-store-dev-cart retail-store-dev-catalog retail-store-dev-checkout retail-store-dev-orders; do
+  kubectl annotate application $app -n argocd argocd.argoproj.io/refresh=hard --overwrite --context dev
+done
+```
+
+### Remove Karpenter taint on dev if pods are Pending:
+```bash
+kubectl taint node --all karpenter.sh/disrupted:NoSchedule- --context dev
+```
+
+---
+
+## 7. Post-Deploy Steps (Both Envs)
+
+### Trigger CI pipeline to build and push images:
+
+**Production** — push a change to `src/` on `gitops` branch:
+```bash
+git checkout gitops
+git commit --allow-empty -m "ci: trigger prod pipeline"
+git push origin gitops
+```
+
+**Dev** — push a change to `src/` on `dev` branch:
+```bash
+git checkout dev
+git commit --allow-empty -m "ci: trigger dev pipeline"
+git push origin dev
+```
+
+### Verify ArgoCD apps are healthy:
+```bash
+# Prod
+kubectl get applications -n argocd
+
+# Dev
+kubectl get applications -n argocd --context dev
+```
+
+---
+
+## 8. Accessing Everything
+
+### Production App URL:
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+```
+
+### Dev App URL:
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' --context dev
+```
+
+### Production ArgoCD UI (port 8080):
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+# Open: http://localhost:8080
+# User: admin
+# Password:
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d
 ```
-Username: `admin`
 
-> **Note:** The password is unique per cluster — it changes every time you recreate the infrastructure. Never hardcode it. Always fetch it fresh with the command above.
-
-### 5.3 — Access ArgoCD UI
+### Dev ArgoCD UI (port 8081):
 ```bash
-kubectl port-forward service/argocd-server -n argocd 8080:443
-```
-Open: `http://localhost:8080`
-
-### 5.4 — Deploy App Services (main branch / manual)
-```bash
-# Add helm repos
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm repo add incubator https://charts.helm.sh/incubator
-helm repo update
-
-# Update dependencies
-helm dependency update src/assets/chart
-helm dependency update src/catalog/chart
-helm dependency update src/carts/chart
-helm dependency update src/checkout/chart
-helm dependency update src/orders/chart
-
-# Create namespace
-kubectl create namespace retail-store
-
-# Deploy all services
-helm upgrade --install assets    src/assets/chart    -n retail-store
-helm upgrade --install catalog   src/catalog/chart   -n retail-store
-helm upgrade --install carts     src/carts/chart     -n retail-store
-helm upgrade --install checkout  src/checkout/chart  -n retail-store
-helm upgrade --install orders    src/orders/chart    -n retail-store
-helm upgrade --install ui        src/ui/chart        -n retail-store \
-  -f src/ui/chart/values-nginx-ingress.yaml
+kubectl port-forward svc/argocd-server -n argocd 8081:443 --context dev
+# Open: http://localhost:8081
+# User: admin
+# Password:
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" --context dev | base64 -d
 ```
 
-### 5.5 — GitOps Branch Setup (production workflow)
-```bash
-# Create and push gitops branch
-git checkout -b gitops
-git push -u origin gitops
-```
-This triggers GitHub Actions to build all service images and push to private ECR.
-
-### 5.6 — ECR Login (for manual docker operations)
+### ECR Login (for manual docker operations):
 ```bash
 aws ecr get-login-password --region us-west-2 | \
   docker login --username AWS --password-stdin \
   033484686218.dkr.ecr.us-west-2.amazonaws.com
 ```
-Note: Docker Desktop must be running before this command.
 
 ---
 
-## 6. Known Issues & Fixes
+## 9. Known Issues & Fixes
 
-### Issue 1 — `kubectl` not found in PowerShell PATH
-**Symptom:** `kubectl : The term 'kubectl' is not recognized`
-**Cause:** kubectl.exe was downloaded to the `terraform/` folder but not added to PATH.
-**Fix:**
-```powershell
-# Copy to user bin folder and add to PATH
-New-Item -ItemType Directory -Path "$env:USERPROFILE\bin" -Force
-Copy-Item 'terraform\kubectl.exe' "$env:USERPROFILE\bin\kubectl.exe" -Force
-$env:PATH = "$env:USERPROFILE\bin;" + $env:PATH
-[Environment]::SetEnvironmentVariable('PATH', "$env:USERPROFILE\bin;" + [Environment]::GetEnvironmentVariable('PATH','User'), 'User')
-```
-Or download fresh:
-```powershell
-curl.exe -L -o "$env:USERPROFILE\bin\kubectl.exe" `
-  "https://dl.k8s.io/release/v1.33.1/bin/windows/amd64/kubectl.exe"
-```
+### Issue 1 — ArgoCD `context deadline exceeded` in Terraform
+**Fix:** `timeout = 600` and `wait = true` already added to `terraform/argocd.tf`.
+If it still fails, run helm upgrade manually (see Section 5), then re-run `terraform apply`.
 
-### Issue 2 — ArgoCD `context deadline exceeded` in Terraform
-**Symptom:** `helm_release.argocd: Still creating... [06m00s elapsed]` then timeout
-**Cause:** Default Terraform helm_release timeout (5 min) is too short for ArgoCD startup.
-**Fix:** Add `timeout = 600` to the `helm_release "argocd"` resource (see Section 2.4).
-If already hit, run the `helm upgrade` command from Section 5.1, then re-run `terraform apply`.
+### Issue 2 — kubectl not in PATH after new session
+**Fix:** Open a new terminal — the PATH update is permanent.
+Or run: `$env:PATH = "$env:USERPROFILE\bin;" + $env:PATH`
 
-### Issue 3 — `kubectl` pointing to old/destroyed cluster
+### Issue 3 — Stale kubeconfig after cluster recreation
 **Symptom:** `dial tcp: lookup XXXX.gr7.us-west-2.eks.amazonaws.com: no such host`
-**Cause:** kubeconfig still has the old cluster endpoint after `terraform destroy` + `apply`.
 **Fix:**
 ```bash
 aws eks list-clusters --region us-west-2
 aws eks update-kubeconfig --region us-west-2 --name <new-cluster-name>
 ```
 
-### Issue 4 — `docker` not found
-**Symptom:** `docker : The term 'docker' is not recognized`
-**Cause:** Docker Desktop not installed or not started.
-**Fix:**
-```powershell
-winget install Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
-# Then restart your machine and launch Docker Desktop
+### Issue 4 — ImagePullBackOff on catalog or cart
+**Symptom:** Old image tags from previous cluster don't exist in new ECR
+**Fix:** Check ECR for available tags, update `values.yaml` or `values-dev.yaml`:
+```bash
+aws ecr list-images --repository-name retail-store-catalog --region us-west-2
 ```
+Update tag in `src/catalog/chart/values.yaml` (prod) or `src/catalog/chart/values-dev.yaml` (dev), commit and push.
 
-### Issue 5 — PowerShell `Invoke-WebRequest` / `WebClient` fails silently
-**Symptom:** Downloads fail with no clear error using PowerShell web cmdlets.
-**Cause:** TLS/SSL handling issue in PowerShell on this Windows Server environment.
-**Fix:** Always use `curl.exe` (built into Windows 10+) instead:
-```powershell
-curl.exe -L -o output.file "https://example.com/file"
-```
-
-### Issue 6 — `git checkout gitops` fails
-**Symptom:** `error: pathspec 'gitops' did not match any file(s) known to git`
-**Cause:** The `gitops` branch doesn't exist yet — it must be created.
+### Issue 5 — Pods stuck in Pending (Karpenter taint)
+**Symptom:** `0/1 nodes available: 1 node(s) had untolerated taint {karpenter.sh/disrupted}`
 **Fix:**
 ```bash
-git checkout -b gitops
-git push -u origin gitops
+# Prod
+kubectl taint node --all karpenter.sh/disrupted:NoSchedule-
+
+# Dev
+kubectl taint node --all karpenter.sh/disrupted:NoSchedule- --context dev
 ```
 
-### Issue 7 — ArgoCD deprecated `server.extraArgs` warning
-**Symptom:** `DEPRECATED option server.extraArgs."--insecure"`
-**Cause:** ArgoCD chart v5.x changed the config key.
-**Fix:** Update `terraform/argocd.tf` as described in Section 2.3.
+### Issue 6 — Dev app shows 500 error
+**Symptom:** UI can't reach backend services
+**Fix:** Ensure `src/ui/chart/values-dev.yaml` has correct dev service endpoints:
+```yaml
+app:
+  endpoints:
+    catalog: http://retail-store-dev-catalog:80
+    carts: http://retail-store-dev-cart-carts:80
+    orders: http://retail-store-dev-orders:80
+    checkout: http://retail-store-dev-checkout:80
+```
+
+### Issue 7 — Dev pods OOMKilled or slow to start
+**Symptom:** Spring Boot apps crash on 2vCPU/4GB node
+**Fix:** `values-dev.yaml` already has reduced resource requests (`50m CPU, 128-256Mi memory`).
+If node is still too small, Karpenter will provision a larger one automatically.
+
+### Issue 8 — GitHub Actions "invalid security token"
+**Fix:** Get fresh credentials from Terraform and update GitHub Secrets:
+```bash
+cd terraform
+terraform output -raw gitops_user_access_key_id
+terraform output -raw gitops_user_secret_access_key
+```
+
+### Issue 9 — `regcred` secret missing after cluster recreation
+**Symptom:** `Unable to retrieve some image pull secrets (regcred)`
+**Fix:** Re-create the secret (see Section 5 and 6 above).
+
+### Issue 10 — Docker not found
+**Fix:** Install Docker Desktop, restart machine, launch Docker Desktop before running any docker commands.
 
 ---
 
-## 7. Accessing the Application
+## 10. Destroy & Recreate
 
-### ArgoCD UI
+### Destroy Dev:
 ```bash
-kubectl port-forward service/argocd-server -n argocd 8080:443
-# Open: http://localhost:8080
-# User: admin  |  Password: (from Section 5.2)
+cd terraform-dev
+terraform destroy
 ```
 
-### Retail Store UI
-```bash
-kubectl port-forward service/ui -n retail-store 8081:80
-# Open: http://localhost:8081
-```
-
-### Get Load Balancer URL (if ingress is configured)
-```bash
-kubectl get ingress -n retail-store
-kubectl get service -n ingress-nginx
-```
-
----
-
-## 8. Destroying & Recreating Infrastructure
-
-### Destroy
+### Destroy Production:
 ```bash
 cd terraform
 terraform destroy
 ```
-> This deletes the EKS cluster, VPC, all node groups, and all resources.
-> The kubeconfig will become stale — update it after recreating.
 
-### Recreate
-1. Run `terraform apply` again
-2. The cluster name will have a **new random suffix** (e.g., `retail-store-8rwj` → `retail-store-xxxx`) because of `random_string.suffix` in `locals.tf`
-3. Run `aws eks update-kubeconfig` with the new cluster name
-4. If ArgoCD helm shows `failed`, run the helm upgrade fix from Section 5.1
-5. Re-run `terraform apply` to finish applying ArgoCD projects and applications
+> After destroy, the cluster name changes (new random suffix). Always run `aws eks update-kubeconfig` with the new name.
 
----
-
-## 9. Tools Required on Your Machine
-
-### Install kubectl (Windows — no admin required)
-```powershell
-# Create user bin folder
-New-Item -ItemType Directory -Path "$env:USERPROFILE\bin" -Force
-
-# Download kubectl
-curl.exe -L -o "$env:USERPROFILE\bin\kubectl.exe" `
-  "https://dl.k8s.io/release/v1.33.1/bin/windows/amd64/kubectl.exe"
-
-# Add to PATH permanently
-$currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-[Environment]::SetEnvironmentVariable('PATH', "$env:USERPROFILE\bin;$currentPath", 'User')
-
-# Add to current session
-$env:PATH = "$env:USERPROFILE\bin;" + $env:PATH
-
-# Verify
-kubectl version --client
-```
-
-### Install Helm (Windows)
-```powershell
-winget install Helm.Helm
-```
-
-### Install Terraform (Windows)
-Download from https://developer.hashicorp.com/terraform/downloads
-Extract `terraform.exe` to `C:\Terraform\` (already in PATH on this machine).
-
-### Install Docker Desktop (Windows)
-```powershell
-winget install Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
-# Restart machine after install
-```
-
-### Configure AWS CLI
-```bash
-aws configure
-# Enter: Access Key ID, Secret Access Key, Region (us-west-2), Output format (json)
-```
+### Full Recreate Order:
+1. `terraform apply` in `terraform/` (prod) — ~15-20 min
+2. Update kubeconfig for prod
+3. Fix ArgoCD if needed (helm upgrade)
+4. Create `regcred` secret on prod
+5. Update GitHub Secrets with new IAM credentials from terraform output
+6. `terraform apply` in `terraform-dev/` (dev) — ~15-20 min
+7. Update kubeconfig for dev with `--alias dev`
+8. Create `regcred` secret on dev
+9. Force ArgoCD refresh on dev apps
+10. Remove Karpenter taints if pods are Pending
+11. Trigger CI pipelines to build fresh images
 
 ---
 
-## Quick Reference — Cluster Info
+## 11. Quick Reference
 
 | Item | Value |
 |------|-------|
 | AWS Region | `us-west-2` |
 | AWS Account ID | `033484686218` |
-| Cluster Name Pattern | `retail-store-<4-char-random>` |
-| ArgoCD Namespace | `argocd` |
-| App Namespace | `retail-store` |
-| ArgoCD Chart Version | `5.51.6` |
-| GitHub Repo | `https://github.com/Shivanshusaxena2/retail-store-sample-app` |
-| Main Branch | `main` — public images, manual deploy |
-| GitOps Branch | `gitops` — private ECR, automated CI/CD |
+| Prod cluster name pattern | `retail-store-<4-char-random>` |
+| Dev cluster name pattern | `retail-store-dev-<4-char-random>` |
+| Prod namespace | `retail-store` |
+| Dev namespace | `retail-store-dev` |
+| Prod VPC CIDR | `10.0.0.0/16` |
+| Dev VPC CIDR | `10.1.0.0/16` |
+| ArgoCD chart version | `5.51.6` |
+| Prod ArgoCD port-forward | `8080` |
+| Dev ArgoCD port-forward | `8081` |
+| GitHub repo | `https://github.com/Shivanshusaxena2/retail-store-sample-app` |
+| Prod branch | `gitops` |
+| Dev branch | `dev` |
+| Prod CI workflow | `.github/workflows/deploy.yml` |
+| Dev CI workflow | `.github/workflows/deploy-dev.yml` |
+| Promote workflow | `.github/workflows/promote-to-main.yml` |
+| Prod Terraform dir | `terraform/` |
+| Dev Terraform dir | `terraform-dev/` |
+| Prod ArgoCD apps dir | `argocd/applications/` |
+| Dev ArgoCD apps dir | `argocd-dev/applications/` |
 
 ---
 

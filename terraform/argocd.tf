@@ -19,6 +19,8 @@ resource "helm_release" "argocd" {
   name             = "argocd"
   namespace        = var.argocd_namespace
   create_namespace = true
+  timeout          = 600
+  wait             = true
 
   repository = "https://argoproj.github.io/argo-helm"
   chart      = "argo-cd"
@@ -27,18 +29,20 @@ resource "helm_release" "argocd" {
   # ArgoCD configuration values
   values = [
     yamlencode({
+      # Fix for deprecated server.extraArgs["--insecure"]
+      configs = {
+        params = {
+          "server.insecure" = true
+        }
+      }
       # Server configuration
       server = {
         service = {
           type = "ClusterIP"
         }
         ingress = {
-          enabled = false  # We'll use port-forward for access
+          enabled = false
         }
-        # Enable insecure mode for easier local access
-        extraArgs = [
-          "--insecure"
-        ]
       }
       
       # Controller configuration
