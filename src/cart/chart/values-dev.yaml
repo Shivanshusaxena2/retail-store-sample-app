@@ -1,6 +1,6 @@
 image:
   repository: 033484686218.dkr.ecr.us-west-2.amazonaws.com/retail-store-cart
-  tag: "7a1d96c"
+  tag: "dev-e8f7fd4"
   pullPolicy: Always
 imagePullSecrets:
   - name: regcred
