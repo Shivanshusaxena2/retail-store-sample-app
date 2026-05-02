@@ -1,0 +1,16 @@
+image:
+  repository: retailstoredrsj4r.azurecr.io/retail-store-ui
+  tag: "dr-latest"
+  pullPolicy: Always
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+app:
+  endpoints:
+    catalog: http://retail-store-dr-catalog:80
+    carts: http://retail-store-dr-cart-carts:80
+    orders: http://retail-store-dr-orders:80
+    checkout: http://retail-store-dr-checkout:80

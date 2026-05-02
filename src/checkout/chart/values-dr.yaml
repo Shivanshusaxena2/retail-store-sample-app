@@ -1,0 +1,10 @@
+image:
+  repository: retailstoredrsj4r.azurecr.io/retail-store-checkout
+  tag: "dr-latest"
+  pullPolicy: Always
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
