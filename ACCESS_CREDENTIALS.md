@@ -17,7 +17,7 @@
 |-------------|-----|--------|
 | **Production** | `http://k8s-ingressn-ingressn-<hash>.elb.us-west-2.amazonaws.com` | 🟢 Live |
 | **Dev** | `http://k8s-ingressn-ingressn-<hash>.elb.us-west-2.amazonaws.com` | 🟢 Live |
-| **DR (Azure)** | `http://<azure-lb-ip>` | 🔄 Deploying |
+| **DR (Azure)** | `http://<azure-lb-ip>` — *run: `kubectl get svc -n ingress-nginx --context dr -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'`* | 🔄 Deploying |
 
 ### Get live URLs:
 ```bash
@@ -72,7 +72,7 @@ kubectl get svc monitoring-grafana -n monitoring \
 |-------------|-------|-------------|--------|----------------|
 | **Production** | AWS | `retail-store-ffup` | `us-west-2` | `arn:aws:eks:us-west-2:033484686218:cluster/retail-store-ffup` |
 | **Dev** | AWS | `retail-store-dev-adp5` | `us-west-2` | `dev` |
-| **DR** | Azure | `retail-store-dr-<suffix>` | `centralindia` | `dr` |
+| **DR** | Azure | `retail-store-dr-sj4r` | `eastus` | `dr` |
 
 ### Configure kubectl:
 ```bash
@@ -156,13 +156,12 @@ aws ecr get-login-password --region us-west-2 | \
 | Subscription ID | `14652e0a-47e7-4d83-bc39-0947f8d35c58` |
 
 ### ACR (Azure Container Registry)
-> Get after terraform apply:
-```bash
-cd terraform-dr
-terraform output acr_login_server
-terraform output -raw acr_admin_username
-terraform output -raw acr_admin_password
-```
+| Item | Value |
+|------|-------|
+| ACR Name | `retailstoredrsj4r` |
+| Login Server | `retailstoredrsj4r.azurecr.io` |
+| Username | `retailstoredrsj4r` |
+| Password | *(run: `cd terraform-dr && terraform output -raw acr_admin_password`)* |
 
 ---
 
@@ -182,12 +181,12 @@ terraform output -raw acr_admin_password
 | `AWS_REGION` | `us-west-2` | Fixed |
 | `AWS_ACCOUNT_ID` | `033484686218` | Fixed |
 | `AZURE_CREDENTIALS` | *(JSON SP credentials)* | See Azure SP section above |
-| `AZURE_ACR_NAME` | *(after DR deploy)* | `terraform output acr_name` in terraform-dr/ |
-| `AZURE_ACR_LOGIN_SERVER` | *(after DR deploy)* | `terraform output acr_login_server` in terraform-dr/ |
-| `AZURE_ACR_USERNAME` | *(after DR deploy)* | `terraform output -raw acr_admin_username` in terraform-dr/ |
-| `AZURE_ACR_PASSWORD` | *(after DR deploy)* | `terraform output -raw acr_admin_password` in terraform-dr/ |
+| `AZURE_ACR_NAME` | `retailstoredrsj4r` | Fixed after DR deploy |
+| `AZURE_ACR_LOGIN_SERVER` | `retailstoredrsj4r.azurecr.io` | Fixed after DR deploy |
+| `AZURE_ACR_USERNAME` | `retailstoredrsj4r` | Fixed after DR deploy |
+| `AZURE_ACR_PASSWORD` | *(run: `terraform output -raw acr_admin_password` in terraform-dr/)* | Rotate if needed |
 | `AZURE_RESOURCE_GROUP` | `retail-store-dr-rg` | Fixed |
-| `AZURE_AKS_NAME` | *(after DR deploy)* | `terraform output cluster_name` in terraform-dr/ |
+| `AZURE_AKS_NAME` | `retail-store-dr-sj4r` | Fixed after DR deploy |
 
 ---
 
@@ -257,4 +256,4 @@ kubectl get svc -n ingress-nginx --context dr \
 ---
 
 *This file is auto-updated. Last infrastructure state: May 2, 2026*
-*Prod cluster: retail-store-ffup | Dev cluster: retail-store-dev-adp5 | DR: deploying*
+*Prod cluster: retail-store-ffup | Dev cluster: retail-store-dev-adp5 | DR cluster: retail-store-dr-sj4r (Azure eastus)*
