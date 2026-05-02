@@ -1,0 +1,51 @@
+resource "time_sleep" "wait_for_cluster" {
+  create_duration = "30s"
+  depends_on      = [azurerm_kubernetes_cluster.dr]
+}
+
+resource "helm_release" "argocd" {
+  name             = "argocd"
+  namespace        = "argocd"
+  create_namespace = true
+  timeout          = 600
+  wait             = true
+
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+  version    = var.argocd_chart_version
+
+  values = [
+    yamlencode({
+      configs = {
+        params = {
+          "server.insecure" = true
+        }
+        secret = {
+          argocdServerAdminPassword      = "$2a$10$lqyJT0yKZOdorwZ93BnlGuCc5xFeWWiHPkiv98ownDhVSGEFr/Uyy"
+          argocdServerAdminPasswordMtime = "2026-01-01T00:00:00Z"
+        }
+      }
+      server = {
+        service = { type = "ClusterIP" }
+        ingress = { enabled = false }
+      }
+      controller  = { resources = { requests = { cpu = "100m", memory = "128Mi" }, limits = { cpu = "500m", memory = "512Mi" } } }
+      repoServer  = { resources = { requests = { cpu = "50m",  memory = "64Mi"  }, limits = { cpu = "200m", memory = "256Mi" } } }
+      redis       = { resources = { requests = { cpu = "50m",  memory = "64Mi"  }, limits = { cpu = "200m", memory = "128Mi" } } }
+    })
+  ]
+
+  depends_on = [time_sleep.wait_for_cluster]
+}
+
+resource "kubectl_manifest" "argocd_projects" {
+  for_each   = fileset("${path.module}/../argocd-dr/projects", "*.yaml")
+  yaml_body  = file("${path.module}/../argocd-dr/projects/${each.value}")
+  depends_on = [helm_release.argocd]
+}
+
+resource "kubectl_manifest" "argocd_apps" {
+  for_each   = fileset("${path.module}/../argocd-dr/applications", "*.yaml")
+  yaml_body  = file("${path.module}/../argocd-dr/applications/${each.value}")
+  depends_on = [kubectl_manifest.argocd_projects]
+}
