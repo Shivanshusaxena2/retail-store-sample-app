@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: retail-store-dr-cart
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: retail-store-dr
+  source:
+    repoURL: https://github.com/Shivanshusaxena2/retail-store-sample-app
+    targetRevision: dr
+    path: src/cart/chart
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-dr.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: retail-store-dr
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

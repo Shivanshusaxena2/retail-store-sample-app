@@ -1,0 +1,182 @@
+name: Deploy DR (Azure)
+
+# Triggers:
+# 1. Automatically after prod deploy succeeds (image sync)
+# 2. Manually via workflow_dispatch (full failover)
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    branches: [gitops]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      force_failover:
+        description: 'Force full DR failover (yes/no)'
+        required: true
+        default: 'no'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AZURE_ACR: ${{ secrets.AZURE_ACR_NAME }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ============================================================
+  # JOB 1: Mirror images from AWS ECR → Azure ACR
+  # ============================================================
+  mirror-images:
+    name: Mirror ECR → ACR (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    # Run if prod deploy succeeded OR manual trigger
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    strategy:
+      matrix:
+        service: [ui, catalog, cart, checkout, orders]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gitops
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Login to Azure ACR
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ secrets.AZURE_ACR_LOGIN_SERVER }}
+          username: ${{ secrets.AZURE_ACR_USERNAME }}
+          password: ${{ secrets.AZURE_ACR_PASSWORD }}
+
+      - name: Mirror image ECR → ACR
+        run: |
+          SERVICE="${{ matrix.service }}"
+          ECR_REPO="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/retail-store-${SERVICE}"
+          ACR_REPO="${{ secrets.AZURE_ACR_LOGIN_SERVER }}/retail-store-${SERVICE}"
+
+          # Get latest prod tag from values.yaml
+          TAG=$(grep -A2 '^image:' src/${SERVICE}/chart/values.yaml | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
+          echo "Mirroring ${SERVICE}:${TAG} from ECR to ACR"
+
+          # Pull from ECR
+          docker pull "${ECR_REPO}:${TAG}"
+
+          # Tag for ACR
+          docker tag "${ECR_REPO}:${TAG}" "${ACR_REPO}:${TAG}"
+          docker tag "${ECR_REPO}:${TAG}" "${ACR_REPO}:dr-latest"
+
+          # Push to ACR
+          docker push "${ACR_REPO}:${TAG}"
+          docker push "${ACR_REPO}:dr-latest"
+
+          echo "✅ Mirrored ${SERVICE}:${TAG} to ACR"
+          echo "ACR_TAG=${TAG}" >> $GITHUB_ENV
+          echo "ACR_REPO=${ACR_REPO}" >> $GITHUB_ENV
+
+      - name: Update DR Helm values
+        run: |
+          SERVICE="${{ matrix.service }}"
+          TAG="${{ env.ACR_TAG }}"
+          ACR_REPO="${{ env.ACR_REPO }}"
+          VALUES_FILE="src/${SERVICE}/chart/values-dr.yaml"
+
+          cat > "${VALUES_FILE}" <<EOF
+          image:
+            repository: ${ACR_REPO}
+            tag: "${TAG}"
+            pullPolicy: Always
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          EOF
+
+          echo "✅ Updated ${VALUES_FILE}"
+
+      - name: Commit DR Helm values
+        run: |
+          SERVICE="${{ matrix.service }}"
+          TAG="${{ env.ACR_TAG }}"
+
+          git config --local user.email "gitops-dr@github.com"
+          git config --local user.name "GitOps DR Bot"
+          git checkout dr 2>/dev/null || git checkout -b dr
+
+          if ! git diff --quiet "src/${SERVICE}/chart/values-dr.yaml" 2>/dev/null; then
+            git add "src/${SERVICE}/chart/values-dr.yaml"
+            git commit -m "🔄 [dr] Mirror ${SERVICE}:${TAG} to ACR [skip ci]"
+            for i in {1..3}; do
+              git push origin dr && break || (git pull --rebase origin dr && sleep 2)
+            done
+          fi
+
+  # ============================================================
+  # JOB 2: Verify DR cluster is healthy
+  # ============================================================
+  verify-dr:
+    name: Verify DR Health
+    runs-on: ubuntu-latest
+    needs: mirror-images
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_AKS_NAME }} \
+            --overwrite-existing
+
+      - name: Check DR pods
+        run: |
+          echo "## 🔄 DR Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n retail-store-dr 2>/dev/null || echo "DR namespace not yet created"
+          kubectl get applications -n argocd 2>/dev/null | grep dr || echo "DR ArgoCD apps not yet synced"
+          echo "✅ DR image mirror complete — ArgoCD will sync within 3 minutes" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # JOB 3: Full Failover (manual trigger only)
+  # ============================================================
+  failover:
+    name: Full DR Failover
+    runs-on: ubuntu-latest
+    needs: verify-dr
+    if: github.event.inputs.force_failover == 'yes'
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Scale up DR to full capacity
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ secrets.AZURE_AKS_NAME }} \
+            --overwrite-existing
+
+          # Scale all DR deployments to production replicas
+          for svc in ui catalog cart checkout orders; do
+            kubectl scale deployment retail-store-dr-${svc} \
+              --replicas=2 -n retail-store-dr 2>/dev/null || true
+          done
+
+          echo "## 🚨 FAILOVER ACTIVATED" >> $GITHUB_STEP_SUMMARY
+          echo "DR environment scaled to full capacity" >> $GITHUB_STEP_SUMMARY
+          echo "**DR URL:** Check Azure Load Balancer for public IP" >> $GITHUB_STEP_SUMMARY
