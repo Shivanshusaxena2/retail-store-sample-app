@@ -12,7 +12,7 @@ terraform {
     }
     helm = {
       source  = "hashicorp/helm"
-      version = ">= 2.0"
+      version = ">= 2.0, < 3.0"
     }
     kubectl = {
       source  = "gavinbunney/kubectl"
@@ -45,19 +45,21 @@ provider "azurerm" {
   subscription_id = var.azure_subscription_id
 }
 
+# Helm and kubectl providers are configured AFTER AKS is created
+# using a data source to read the kubeconfig
 provider "helm" {
   kubernetes {
-    host                   = module.aks.kube_config[0].host
-    client_certificate     = base64decode(module.aks.kube_config[0].client_certificate)
-    client_key             = base64decode(module.aks.kube_config[0].client_key)
-    cluster_ca_certificate = base64decode(module.aks.kube_config[0].cluster_ca_certificate)
+    host                   = module.aks.host
+    client_certificate     = base64decode(module.aks.client_certificate)
+    client_key             = base64decode(module.aks.client_key)
+    cluster_ca_certificate = base64decode(module.aks.cluster_ca_certificate)
   }
 }
 
 provider "kubectl" {
-  host                   = module.aks.kube_config[0].host
-  client_certificate     = base64decode(module.aks.kube_config[0].client_certificate)
-  client_key             = base64decode(module.aks.kube_config[0].client_key)
-  cluster_ca_certificate = base64decode(module.aks.kube_config[0].cluster_ca_certificate)
+  host                   = module.aks.host
+  client_certificate     = base64decode(module.aks.client_certificate)
+  client_key             = base64decode(module.aks.client_key)
+  cluster_ca_certificate = base64decode(module.aks.cluster_ca_certificate)
   load_config_file       = false
 }

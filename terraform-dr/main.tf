@@ -30,7 +30,6 @@ resource "azurerm_subnet" "aks" {
 
 # =============================================================================
 # AZURE CONTAINER REGISTRY (ACR)
-# Mirror of AWS ECR for DR images
 # =============================================================================
 
 resource "azurerm_container_registry" "dr" {
@@ -56,11 +55,11 @@ module "aks" {
   kubernetes_version  = var.kubernetes_version
   prefix              = "dr"
 
-  # Node pool configuration
-  agents_count    = var.node_count
-  agents_size     = var.node_vm_size
-  agents_min_count = 1
-  agents_max_count = 4
+  # Node pool
+  agents_count        = var.node_count
+  agents_size         = var.node_vm_size
+  agents_min_count    = 1
+  agents_max_count    = 4
   enable_auto_scaling = true
 
   # Network
@@ -68,17 +67,17 @@ module "aks" {
   network_plugin = "azure"
   network_policy = "azure"
 
-  # Identity
+  # Identity — SystemAssigned
   identity_type = "SystemAssigned"
-
-  # Attach ACR to AKS so it can pull images without imagePullSecrets
-  attached_acr_id_map = {
-    dr_acr = azurerm_container_registry.dr.id
-  }
 
   # OIDC + Workload Identity
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
+
+  # Attach ACR so AKS can pull images without imagePullSecrets
+  attached_acr_id_map = {
+    dr_acr = azurerm_container_registry.dr.id
+  }
 
   tags = local.common_tags
 
