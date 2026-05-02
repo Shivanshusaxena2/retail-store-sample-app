@@ -1,15 +1,11 @@
-# =============================================================================
-# ARGOCD - DR ENVIRONMENT (AZURE)
-# =============================================================================
-
 resource "time_sleep" "wait_for_cluster" {
-  create_duration = "60s"
-  depends_on      = [module.aks]
+  create_duration = "30s"
+  depends_on      = [azurerm_kubernetes_cluster.dr]
 }
 
 resource "helm_release" "argocd" {
   name             = "argocd"
-  namespace        = var.argocd_namespace
+  namespace        = "argocd"
   create_namespace = true
   timeout          = 600
   wait             = true
@@ -24,38 +20,18 @@ resource "helm_release" "argocd" {
         params = {
           "server.insecure" = true
         }
-        # Admin password: admin@123
         secret = {
           argocdServerAdminPassword      = "$2a$10$lqyJT0yKZOdorwZ93BnlGuCc5xFeWWiHPkiv98ownDhVSGEFr/Uyy"
           argocdServerAdminPasswordMtime = "2026-01-01T00:00:00Z"
         }
       }
       server = {
-        service = {
-          type = "ClusterIP"
-        }
-        ingress = {
-          enabled = false
-        }
+        service = { type = "ClusterIP" }
+        ingress = { enabled = false }
       }
-      controller = {
-        resources = {
-          requests = { cpu = "100m", memory = "128Mi" }
-          limits   = { cpu = "500m", memory = "512Mi" }
-        }
-      }
-      repoServer = {
-        resources = {
-          requests = { cpu = "50m", memory = "64Mi" }
-          limits   = { cpu = "200m", memory = "256Mi" }
-        }
-      }
-      redis = {
-        resources = {
-          requests = { cpu = "50m", memory = "64Mi" }
-          limits   = { cpu = "200m", memory = "128Mi" }
-        }
-      }
+      controller  = { resources = { requests = { cpu = "100m", memory = "128Mi" }, limits = { cpu = "500m", memory = "512Mi" } } }
+      repoServer  = { resources = { requests = { cpu = "50m",  memory = "64Mi"  }, limits = { cpu = "200m", memory = "256Mi" } } }
+      redis       = { resources = { requests = { cpu = "50m",  memory = "64Mi"  }, limits = { cpu = "200m", memory = "128Mi" } } }
     })
   ]
 
