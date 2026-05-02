@@ -89,17 +89,32 @@ az login
 az account show  # verify correct subscription
 ```
 
-### Terraform Azure Provider
-No extra install needed — `terraform init` downloads it automatically.
+### DR User Account
+All DR operations use the dedicated `dr-user-mgmt` account:
 
-### GitHub Secrets Required (see Section 5)
-- `AZURE_CREDENTIALS`
-- `AZURE_ACR_NAME`
-- `AZURE_ACR_LOGIN_SERVER`
-- `AZURE_ACR_USERNAME`
-- `AZURE_ACR_PASSWORD`
-- `AZURE_RESOURCE_GROUP`
-- `AZURE_AKS_NAME`
+| Item | Value |
+|------|-------|
+| User | `dr-user-mgmt@shivanshusaxenaytgmail.onmicrosoft.com` |
+| Password | `DrUser@123!` |
+| Role | Contributor on subscription |
+| Service Principal | `dr-user-mgmt-sp` |
+| SP Client ID | `a115e404-5cf5-48ba-b0a2-d7843d7a3232` |
+| SP Tenant ID | `85e6742e-8945-4d4a-86f5-b0ce51e32e46` |
+
+### Login as dr-user-mgmt
+```bash
+az login --username dr-user-mgmt@shivanshusaxenaytgmail.onmicrosoft.com --password DrUser@123!
+```
+
+### Terraform uses Service Principal automatically
+The `terraform-dr/variables.tf` has the SP credentials configured.
+Set the secret via environment variable before running terraform:
+```powershell
+# Get the secret from your password manager or Azure portal
+# Never commit the actual secret value
+$env:TF_VAR_azure_client_secret = "<SP_CLIENT_SECRET>"
+terraform apply -auto-approve
+```
 
 ---
 

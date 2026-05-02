@@ -8,6 +8,25 @@ variable "azure_subscription_id" {
   default     = "14652e0a-47e7-4d83-bc39-0947f8d35c58"
 }
 
+variable "azure_client_id" {
+  description = "Azure Service Principal Client ID (dr-user-mgmt-sp)"
+  type        = string
+  default     = "a115e404-5cf5-48ba-b0a2-d7843d7a3232"
+}
+
+variable "azure_client_secret" {
+  description = "Azure Service Principal Client Secret"
+  type        = string
+  sensitive   = true
+  default     = ""  # Set via TF_VAR_azure_client_secret env var
+}
+
+variable "azure_tenant_id" {
+  description = "Azure Tenant ID"
+  type        = string
+  default     = "85e6742e-8945-4d4a-86f5-b0ce51e32e46"
+}
+
 variable "azure_location" {
   description = "Azure region for DR environment"
   type        = string
